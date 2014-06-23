@@ -89,7 +89,7 @@ static void *ap_resize_buffer(void *buf, const int min_size)
  * @param[in] long_opt true iff this option was a long option
  * @param[in] argument argument string for this option (may be empty)
  */
-static char push_back_record(struct _arg_parser *const ap, const struct _ap_Option *const option,
+static char push_back_record(struct _arg_parser *const ap, const int option_index,
 				 bool long_opt, const char *const argument)
 {
 	const int len = strlen(argument);
@@ -100,7 +100,7 @@ static char push_back_record(struct _arg_parser *const ap, const struct _ap_Opti
 		return 0;
 	ap->data = (struct _ap_Record *)tmp;
 	p = &(ap->data[ap->data_size]);
-	p->option = option;
+	p->option_index = option_index;
 	p->argument = 0;
 	tmp = ap_resize_buffer(p->argument, len + 1);
 	if (!tmp)
@@ -109,10 +109,10 @@ static char push_back_record(struct _arg_parser *const ap, const struct _ap_Opti
 	strncpy(p->argument, argument, len + 1);
 
 	if (long_opt) {
-		if (!asprintf(&p->opt_string, "--%s", option->name))
+		if (!asprintf(&p->opt_string, "--%s", ap->options[option_index].name))
 			return 0;
 	} else {
-		if (!asprintf(&p->opt_string, "-%c", option->code))
+		if (!asprintf(&p->opt_string, "-%c", ap->options[option_index].code))
 			return 0;
 	}
 
@@ -222,7 +222,7 @@ static char parse_long_option(struct _arg_parser *const ap,
 			add_error(ap, "' requires an argument");
 			return 1;
 		}
-		return push_back_record(ap, &options[index], true, &opt[len + 3]);
+		return push_back_record(ap, index, true, &opt[len + 3]);
 	}
 
 	if (options[index].has_arg == ap_yes) {
@@ -233,10 +233,10 @@ static char parse_long_option(struct _arg_parser *const ap,
 			return 1;
 		}
 		++*argindp;
-		return push_back_record(ap, &options[index], true, arg);
+		return push_back_record(ap, index, true, arg);
 	}
 
-	return push_back_record(ap, &options[index], true, "");
+	return push_back_record(ap, index, true, "");
 }
 
 /**
@@ -282,7 +282,7 @@ static char parse_short_option(struct _arg_parser *const ap,
 		}
 
 		if (options[index].has_arg != ap_no && cind > 0 && opt[cind]) {
-			if (!push_back_record(ap, &options[index], false, &opt[cind]))
+			if (!push_back_record(ap, index, false, &opt[cind]))
 				return 0;
 			++*argindp;
 			cind = 0;
@@ -294,23 +294,39 @@ static char parse_short_option(struct _arg_parser *const ap,
 			}
 			++*argindp;
 			cind = 0;
-			if (!push_back_record(ap, &options[index], false, arg))
+			if (!push_back_record(ap, index, false, arg))
 				return 0;
-		} else if (!push_back_record(ap, &options[index], false, ""))
+		} else if (!push_back_record(ap, index, false, ""))
 			return 0;
 	}
 	return 1;
+}
+
+/**
+ * Extracts number of options in \p options
+ *
+ * @param[in] options Array of user-defined options
+ */
+int get_num_options(const struct _ap_Option options[])
+{
+	int i;
+	for (i=0; options[i].code; i++){}
+	return i;
 }
 
 char ap_init(struct _arg_parser *const ap,
 	     const int argc, const char *const argv[],
 	     const struct _ap_Option options[], const char in_order)
 {
-	const struct _ap_Option non_option = {0, 0, ap_no, 0};
 	const char **non_options = 0;	/* skipped non-options */
 	int non_options_size = 0;	/* number of skipped non-options */
 	int argind = 1;		/* index in argv */
 	int i;
+
+	ap->num_options = get_num_options(options);
+	if (!ap->num_options)
+		return 1;
+	ap->options = options;
 
 	ap->data = 0;
 	ap->error = 0;
@@ -349,7 +365,7 @@ char ap_init(struct _arg_parser *const ap,
 					return 0;
 				non_options = (const char **)tmp;
 				non_options[non_options_size++] = argv[argind++];
-			} else if (!push_back_record(ap, &non_option, false, argv[argind++]))
+			} else if (!push_back_record(ap, ap->num_options, false, argv[argind++]))
 				return 0;
 		}
 	}
@@ -357,10 +373,10 @@ char ap_init(struct _arg_parser *const ap,
 		free_data(ap);
 	else {
 		for (i = 0; i < non_options_size; ++i)
-			if (!push_back_record(ap, &non_option, false, non_options[i]))
+			if (!push_back_record(ap, ap->num_options, false, non_options[i]))
 				return 0;
 		while (argind < argc)
-			if (!push_back_record(ap, &non_option, false, argv[argind++]))
+			if (!push_back_record(ap, ap->num_options, false, argv[argind++]))
 				return 0;
 	}
 	if (non_options)
@@ -391,7 +407,7 @@ int ap_arguments(const struct _arg_parser *const ap)
 int ap_code(const struct _arg_parser *const ap, const int i)
 {
 	if (i >= 0 && i < ap_arguments(ap))
-		return ap->data[i].option->code;
+		return ap->options[ap->data[i].option_index].code;
 	else
 		return 0;
 }
@@ -415,16 +431,17 @@ const char *ap_opt_string(const struct _arg_parser *const ap, const int i)
 const struct _ap_Option *ap_option(const struct _arg_parser *const ap, const int i)
 {
 	if (i >= 0 && i < ap_arguments(ap))
-		return ap->data[i].option;
+		return &ap->options[ap->data[i].option_index];
 	else
 		return 0;
 }
 
-bool ap_is_used(const struct _arg_parser *const ap, int code){
+bool ap_is_used(const struct _arg_parser *const ap, int code)
+{
 	bool ret = false;
 
 	for (int i=0; i < ap->data_size; i++)
-		if (ap->data[i].option->code == code) {
+		if (ap_code(ap, i) == code) {
 			ret = true;
 			break;
 		}

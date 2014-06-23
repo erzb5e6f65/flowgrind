@@ -1031,7 +1031,7 @@ int process_dump_dir() {
  */
 static void parse_cmdline(int argc, char *argv[])
 {
-	const struct _ap_Option options[] = {
+	static const struct _ap_Option options[] = {
 		{'b', 0, ap_yes, 0},
 		{'c', 0, ap_yes, 0},
 #ifdef DEBUG
